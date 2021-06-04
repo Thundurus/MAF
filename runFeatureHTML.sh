@@ -1,8 +1,8 @@
-npx preprocessor  packages/$* --packageLocation test
-cd packages/$*
-node ../../node_modules/@cucumber/cucumber/bin/cucumber-js  $EXTRAS -f json:../../test/report/$*.json cucumber-js --require "test/**/*.js" tmp/test 
+npx preprocessor packages/$1 --packageLocation test
+cd packages/$1
+shift
+node ../../node_modules/@cucumber/cucumber/bin/cucumber-js -f json:../../test/report/report.json cucumber-js $* --require "test/**/*.js" tmp/test
 result=$?
 cd -
-node node_modules/@ln-maf/core/multiReport.js
+npx multiReport
 exit $result
-

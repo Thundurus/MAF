@@ -4,7 +4,7 @@ const assert = require('chai').assert
 const runAWS = require('../awsL')
 const { getFilePath, MAFWhen, filltemplate } = require('@ln-maf/core')
 const fillTemplate = filltemplate
-
+const { bucketExists, createBucket, deleteFile, downloadFile, listBucketFiles, uploadFile } = require('./s3_sdk')
 /**
  * Returns the value of the variable if it exists in this.results.
  * @param {string} variable the variable to check
@@ -38,105 +38,71 @@ function buildPath (path) {
   return path + (path.charAt(path.length - 1) === '/' ? '' : '/')
 }
 
-/**
- * Returns true if the bucket exists on S3
- * @param {string} bucketName The name of the bucket
- * @returns {boolean} true if the bucket exists on S3
- */
-function bucketExists (bucketName) {
-  const res = runAWS('s3 ls')
-  return res.stdout.split('\n').some(function (bucket) {
-    const listedBucket = bucket.split(' ')[2]
-    return listedBucket !== undefined && listedBucket.trim() === bucketName.toLowerCase().trim()
-  })
-}
-
-Given('bucket {string} exists on S3', function (bucketName) {
+Given('bucket {string} exists on S3', async function (bucketName) {
   bucketName = getVal(bucketName, this)
-  if (!bucketExists(bucketName)) {
+  const exists = await bucketExists(bucketName)
+  if (!exists) {
     throw new Error('Bucket ' + bucketName + ' does not exist on S3')
   }
 })
 
-Given('bucket {string} is not on S3', function (bucketName) {
+Given('bucket {string} is not on S3', async function (bucketName) {
   bucketName = getVal(bucketName, this)
-  if (bucketExists(bucketName)) {
+  const exists = await bucketExists(bucketName)
+  if (exists) {
     throw new Error('Bucket ' + bucketName + ' does exist on S3')
   }
 })
 
-Then('bucket {string} exists', function (bucketName) {
+Then('bucket {string} exists', async function (bucketName) {
   bucketName = getVal(bucketName, this)
-  assert(bucketExists(bucketName), 'The bucket does not exist on S3')
+  const exists = await bucketExists(bucketName)
+  assert(exists, 'The bucket does not exist on S3')
 })
-
-function listS3Files (bucketName, path, json = false) {
-  let fileList = path || path === '' ? runAWS(`s3 ls ${s3URL(bucketName, path)}`) : runAWS(`s3 ls ${bucketName} --recursive`)
-  fileList = fileList.stdout.split('\n').filter(x => x.length > 0)
-  if (fileList.length === 0) {
-    return []
-  }
-  const fileRegex = /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d+)\s(.*)/
-  if (json) {
-    return fileList.map(i => {
-      const data = i.match(fileRegex)
-      return { name: data[3], size: JSON.parse(data[2]), date: data[1] }
-    })
-  } else {
-    fileList = fileList.filter(x => fileRegex.test(x))
-    return fileList.map(i => i.match(new RegExp(fileRegex))[3])
-  }
-}
 
 MAFWhen('file list of bucket {string} on path {string} is retrieved', function (bucketName, path) {
   bucketName = getVal(bucketName, this)
   path = getVal(path, this)
-  return listS3Files.call(this, bucketName, path, false)
+  return listBucketFiles.call(this, bucketName, path, false)
 })
 
 MAFWhen('file list of bucket {string} on path {string} is retrieved as json item', function (bucketName, path) {
   bucketName = getVal(bucketName, this)
   path = getVal(path, this)
-  return listS3Files.call(this, bucketName, path, true)
+  return listBucketFiles.call(this, bucketName, path, true)
 })
 
 MAFWhen('all files of bucket {string} is retrieved', function (bucketName) {
   bucketName = getVal(bucketName, this)
-  return listS3Files.call(this, bucketName, null, false)
+  return listBucketFiles.call(this, bucketName, null, false)
 })
 
 MAFWhen('all files of bucket {string} is retrieved as json item', function (bucketName) {
   bucketName = getVal(bucketName, this)
-  return listS3Files.call(this, bucketName, null, true)
+  return listBucketFiles.call(this, bucketName, null, true)
 })
 
-Then('file exists with name {string} at path {string} in bucket {string}', function (fileName, path, bucketName) {
+Then('file exists with name {string} at path {string} in bucket {string}', async function (fileName, path, bucketName) {
   fileName = getVal(fileName, this)
   bucketName = getVal(bucketName, this)
   path = getVal(path, this)
-  const res = runAWS(`s3 ls ${s3URL(bucketName, path)}${fileName}`)
-  // Split res.stdout by lines, then get the last string on the line which should be the filename
-  const exists = res.stdout.split('\n').some(line => line.split(' ').pop().trim() === fileName.trim())
-  assert(exists, 'The file does not exist in ' + s3URL(bucketName, path))
+  const files = await listBucketFiles.call(this, bucketName, path, false)
+  assert(files.some(file => file === fileName), 'The file does not exist in ' + bucketName + ' at path ' + path)
 })
 
-When('file {string} is uploaded to bucket {string} at path {string}', function (file, bucket, path) {
+When('file {string} is uploaded to bucket {string} at path {string}', async function (file, bucket, path) {
   file = getVal(file, this)
   bucket = getVal(bucket, this)
   path = getVal(path, this)
-  const filePath = getFilePath(file, this)
-  if (!this.results) {
-    this.results = {}
-  }
-  const res = runAWS(`s3 cp ${filePath} ${s3URL(bucket, path)}`)
-  this.results.lastRun = res
+  this.results.lastRun = await uploadFile.call(this, file, bucket, path)
 })
 
-When('file {string} is deleted from bucket {string} at path {string}', function (fileName, bucketName, path) {
+When('file {string} is deleted from bucket {string} at path {string}', async function (fileName, bucketName, path) {
   fileName = getVal(fileName, this)
   bucketName = getVal(bucketName, this)
   path = getVal(path, this)
-  const res = runAWS(`s3 rm ${s3URL(bucketName, path)}${fileName}`)
+  await deleteFile.call(this, fileName, bucketName, path)
+  const res = await listBucketFiles.call(this, bucketName, path, false)
   if (!this.results) {
     this.results = {}
   }
@@ -147,8 +113,8 @@ When('file {string} from bucket {string} at path {string} is retrieved', async f
   fileName = getVal(fileName, this)
   bucketName = getVal(bucketName, this)
   path = getVal(path, this)
+  await downloadFile.call(this, fileName, bucketName, path)
   const filePath = getFilePath(fileName, this)
-  runAWS(['s3', 'cp', s3URL(bucketName, path) + fileName, filePath])
   const fileContents = fs.readFileSync(filePath, 'utf8')
   if (!this.results) {
     this.results = {}
@@ -158,25 +124,12 @@ When('file {string} from bucket {string} at path {string} is retrieved', async f
 })
 
 /**
- * Creates a new bucket on S3
- * @param {string} bucketName the name of the new bucket
- * @returns {Object} An object containing details of creating the new bucket
- */
-function createBucket (bucketName) {
-  const res = runAWS(`s3 mb s3://${bucketName}`)
-  if (res.stdout.includes('BucketAlreadyExists')) {
-    console.log('A bucket named ' + bucketName + ' already exists on S3')
-  }
-  return res
-}
-
-/**
  * This step definition should only be used for testing
  * This will create a new bucket on S3
  */
-Given('bucket {string} is created on S3', function (bucketName) {
+Given('bucket {string} is created on S3', async function (bucketName) {
   bucketName = getVal(bucketName, this)
-  createBucket(bucketName)
+  await createBucket(bucketName)
 })
 
 /**
@@ -187,6 +140,5 @@ When('test file {string} is created', async function (fileName) {
   const filePath = getFilePath(fileName, this)
   fs.writeFileSync(filePath, 'this is a test file', function (err) {
     if (err) throw err
-    console.log('Created file ' + filePath)
   })
 })
